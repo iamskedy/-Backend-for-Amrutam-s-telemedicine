@@ -10,6 +10,7 @@ import { errorHandler, notFoundHandler } from '@/middleware/errorHandler';
 import { httpRequestDuration, httpRequestsTotal } from '@/lib/metrics';
 import { healthRouter } from '@/modules/health/health.routes';
 import { authRouter } from './modules/auth/auth.routes';
+import { doctorRouter } from '@/modules/doctors/doctor.routes';
 
 export function buildApp(): Express {
   const app = express();
@@ -48,6 +49,7 @@ export function buildApp(): Express {
  
   app.use('/health', healthRouter);
   app.use('/api/v1/auth', authRouter);
+  app.use('/api/v1/doctors', doctorRouter);
  
 
   app.use(notFoundHandler);
