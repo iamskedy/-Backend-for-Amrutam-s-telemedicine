@@ -4,15 +4,10 @@ import { env } from '@/config';
 import { Errors } from '@/middleware/errorHandler';
 
 export interface AuthPayload {
-  sub: string; // user id
+  sub: string; 
   role: 'PATIENT' | 'DOCTOR' | 'ADMIN';
 }
 
-declare module 'express-serve-static-core' {
-  interface Request {
-    user?: AuthPayload;
-  }
-}
 
 export function requireAuth(req: Request, _res: Response, next: NextFunction): void {
   const header = req.header('authorization');
