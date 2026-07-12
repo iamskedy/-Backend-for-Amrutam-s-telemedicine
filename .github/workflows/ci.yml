@@ -20,6 +20,19 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
+      postgres:
+        image: postgres:16
+        ports: ['5432:5432']
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: amrutam_test
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v4
 
@@ -40,14 +53,20 @@ jobs:
       - name: Generate Prisma client
         run: npx prisma generate
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/amrutam_test
+          DIRECT_URL: postgresql://postgres:postgres@localhost:5432/amrutam_test
+
+      - name: Run migrations
+        run: npx prisma migrate deploy
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/amrutam_test
+          DIRECT_URL: postgresql://postgres:postgres@localhost:5432/amrutam_test
 
       - name: Run tests
         run: npm test
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/amrutam_test
+          DIRECT_URL: postgresql://postgres:postgres@localhost:5432/amrutam_test
           REDIS_URL: redis://localhost:6379
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
           JWT_REFRESH_SECRET: ${{ secrets.JWT_REFRESH_SECRET }}
