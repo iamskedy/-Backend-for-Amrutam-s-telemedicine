@@ -11,6 +11,14 @@ import { httpRequestDuration, httpRequestsTotal } from '@/lib/metrics';
 import { healthRouter } from '@/modules/health/health.routes';
 import { authRouter } from './modules/auth/auth.routes';
 import { doctorRouter } from '@/modules/doctors/doctor.routes';
+import { availabilityRouter } from '@/modules/availability/availability.routes';
+import { consultationRouter } from '@/modules/consultations/consultation.routes';
+import { prescriptionRouter } from '@/modules/prescriptions/prescription.routes';
+import { searchRouter } from '@/modules/search/search.routes';
+import { adminRouter } from '@/modules/admin/analytics.routes';
+import { bookingRouter } from '@/modules/booking/booking.routes';
+
+
 
 export function buildApp(): Express {
   const app = express();
@@ -50,6 +58,13 @@ export function buildApp(): Express {
   app.use('/health', healthRouter);
   app.use('/api/v1/auth', authRouter);
   app.use('/api/v1/doctors', doctorRouter);
+  app.use('/api/v1/availability', availabilityRouter);
+  app.use('/api/v1/consultations', consultationRouter);
+
+app.use('/api/v1/bookings', bookingRouter);
+  app.use('/api/v1/prescriptions', prescriptionRouter);
+  app.use('/api/v1/search', searchRouter);
+  app.use('/api/v1/admin', adminRouter);
  
 
   app.use(notFoundHandler);
