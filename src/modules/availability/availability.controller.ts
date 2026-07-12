@@ -1,9 +1,11 @@
 import { Request, Response } from 'express';
 import { asyncHandler } from '@/lib/asyncHandler';
 import { createSlot, listSlotsForDoctor, cancelSlot } from '@/modules/availability/availability.service';
+import { createSlotSchema } from '@/modules/availability/availability.schema';
 
 export const createSlotController = asyncHandler(async (req: Request, res: Response) => {
-  const slot = await createSlot(req.user!.sub, req.body);
+  const input = createSlotSchema.parse(req.body);
+  const slot = await createSlot(req.user!.sub, input);
   res.status(201).json(slot);
 });
 

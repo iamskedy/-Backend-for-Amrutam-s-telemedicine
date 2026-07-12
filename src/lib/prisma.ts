@@ -2,6 +2,7 @@ import { PrismaClient } from '@prisma/client';
 import { env, isProd } from '@/config';
 
 
+
 declare global {
   var __prisma: PrismaClient | undefined;
 }

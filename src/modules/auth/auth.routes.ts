@@ -15,10 +15,8 @@ import {
 
 export const authRouter = Router();
 
-
 authRouter.post('/signup', validate(signupSchema), authLimiter, signupController);
 authRouter.post('/login', validate(loginSchema), authLimiter, loginController);
-
 
 authRouter.post('/mfa/enroll', requireAuth, mfaEnrollController);
 authRouter.post('/mfa/verify', requireAuth, validate(mfaVerifySchema), mfaVerifyEnrollmentController);

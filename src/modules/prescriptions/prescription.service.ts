@@ -2,8 +2,15 @@ import { prisma } from '@/lib/prisma';
 import { Errors } from '@/middleware/errorHandler';
 import { writeAuditLog } from '@/modules/audit/audit.service';
 import { prescriptionPdfQueue } from '@/lib/queue';
+import { CreatePrescriptionInput } from '@/modules/prescriptions/prescription.schema';
 
-export async function createPrescription(doctorUserId: string, consultationId: string, content: unknown) {
+type PrescriptionContent = CreatePrescriptionInput['content'];
+
+export async function createPrescription(
+  doctorUserId: string,
+  consultationId: string,
+  content: PrescriptionContent,
+) {
   const doctor = await prisma.doctor.findUnique({ where: { userId: doctorUserId } });
   if (!doctor) {
     throw Errors.notFound('Doctor profile not found');
@@ -25,7 +32,7 @@ export async function createPrescription(doctorUserId: string, consultationId: s
       consultationId,
       doctorId: doctor.id,
       patientId: consultation.patientId,
-      content: content as any,
+      content,                        
       status: 'ACTIVE',
     },
   });
@@ -52,8 +59,8 @@ export async function createPrescription(doctorUserId: string, consultationId: s
 export async function supersedePrescription(
   doctorUserId: string,
   oldPrescriptionId: string,
-  newContent: unknown,
-) {
+  newContent: PrescriptionContent,  
+)  {
   const doctor = await prisma.doctor.findUnique({ where: { userId: doctorUserId } });
   if (!doctor) {
     throw Errors.notFound('Doctor profile not found');
@@ -74,7 +81,7 @@ export async function supersedePrescription(
         consultationId: old.consultationId,
         doctorId: old.doctorId,
         patientId: old.patientId,
-        content: newContent as any,
+        content: newContent, 
         status: 'ACTIVE',
         supersedesId: old.id,
       },

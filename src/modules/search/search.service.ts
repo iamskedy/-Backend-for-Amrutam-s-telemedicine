@@ -1,3 +1,4 @@
+import { Doctor } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { redis } from '@/lib/redis';
 import { logger } from '@/lib/logger';
@@ -14,13 +15,13 @@ function cacheKey(input: SearchDoctorsInput): string {
   return `search:doctors:${JSON.stringify(input)}`;
 }
 
-export async function searchDoctors(input: SearchDoctorsInput) {
+export async function searchDoctors(input: SearchDoctorsInput): Promise<Doctor[]> {
   const key = cacheKey(input);
 
   try {
     const cached = await redis.get(key);
     if (cached) {
-      return JSON.parse(cached);
+      return JSON.parse(cached) as Doctor[];
     }
   } catch (err) {
     logger.error({ err }, 'search cache read failed — falling through to DB');

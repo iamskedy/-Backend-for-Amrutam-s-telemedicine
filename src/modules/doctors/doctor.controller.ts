@@ -7,6 +7,7 @@ import {
   listDoctors,
   verifyDoctor,
 } from '@/modules/doctors/doctor.service';
+import { updateDoctorProfileSchema } from '@/modules/doctors/doctor.schema';
 
 export const getOwnProfileController = asyncHandler(async (req: Request, res: Response) => {
   const doctor = await getDoctorProfile(req.user!.sub);
@@ -14,7 +15,8 @@ export const getOwnProfileController = asyncHandler(async (req: Request, res: Re
 });
 
 export const updateOwnProfileController = asyncHandler(async (req: Request, res: Response) => {
-  const doctor = await updateDoctorProfile(req.user!.sub, req.body);
+  const input = updateDoctorProfileSchema.parse(req.body);
+  const doctor = await updateDoctorProfile(req.user!.sub, input);
   res.status(200).json(doctor);
 });
 
@@ -32,3 +34,4 @@ export const verifyDoctorController = asyncHandler(async (req: Request, res: Res
   const doctor = await verifyDoctor(req.params.id as string);
   res.status(200).json(doctor);
 });
+

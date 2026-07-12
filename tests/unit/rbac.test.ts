@@ -9,9 +9,9 @@ describe('requireRole middleware', () => {
     return { user } as unknown as Request;
   }
 
-  function mockNext(): jest.Mock {
-    return jest.fn();
-  }
+function mockNext(): jest.Mock<void, [Error?]> {
+  return jest.fn<void, [Error?]>();  
+}
 
   it('allows a user whose role is in the allowed list', () => {
     const req = mockReq({ sub: '1', role: 'ADMIN' });
@@ -29,9 +29,9 @@ describe('requireRole middleware', () => {
     middleware(req, {} as Response, next as NextFunction);
 
     expect(next).toHaveBeenCalledTimes(1);
-    const errArg = next.mock.calls[0][0];
+   const errArg = next.mock.calls[0][0] as AppError;
     expect(errArg).toBeInstanceOf(AppError);
-    expect(errArg.statusCode).toBe(403);
+    expect(errArg.statusCode).toBe(403);  
   });
 
   it('denies a request with no authenticated user at all', () => {

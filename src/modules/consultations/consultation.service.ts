@@ -23,7 +23,7 @@ export async function transitionConsultation(
     throw Errors.notFound('Consultation not found');
   }
 
-  const allowed = ALLOWED_TRANSITIONS[consultation.status as ConsultationStatus];
+  const allowed = ALLOWED_TRANSITIONS[consultation.status];
   if (!allowed.includes(newStatus)) {
     throw Errors.conflict(
       `Cannot transition consultation from ${consultation.status} to ${newStatus}`,

@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { logger } from '@/lib/logger';
 
@@ -6,11 +7,10 @@ interface WriteAuditLogInput {
   action: string;
   entityType: string;
   entityId: string;
-  before?: unknown;
-  after?: unknown;
+  before?: Prisma.InputJsonValue;
+  after?: Prisma.InputJsonValue;
   ip?: string;
 }
-
 
 export async function writeAuditLog(input: WriteAuditLogInput): Promise<void> {
   try {
@@ -20,13 +20,12 @@ export async function writeAuditLog(input: WriteAuditLogInput): Promise<void> {
         action: input.action,
         entityType: input.entityType,
         entityId: input.entityId,
-        before: input.before as any,
-        after: input.after as any,
+        before: input.before ?? Prisma.JsonNull,
+        after: input.after ?? Prisma.JsonNull,
         ip: input.ip,
       },
     });
   } catch (err) {
-    
     logger.error({ err, input }, 'failed to write audit log');
   }
 }

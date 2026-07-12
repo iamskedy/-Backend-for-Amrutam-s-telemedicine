@@ -9,6 +9,7 @@ import {
   cancelSlotController,
 } from '@/modules/availability/availability.controller';
 
+
 export const availabilityRouter = Router();
 
 // Doctor-only — create a new availability slot for themselves.

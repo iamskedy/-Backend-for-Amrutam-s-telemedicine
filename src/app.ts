@@ -46,7 +46,8 @@ export function buildApp(): Express {
     const start = process.hrtime.bigint();
     res.on('finish', () => {
       const durationSec = Number(process.hrtime.bigint() - start) / 1e9;
-      const route = req.route?.path ? `${req.baseUrl}${req.route.path}` : req.path;
+      const routePath = (req.route as { path?: string } | undefined)?.path;
+      const route = routePath ? `${req.baseUrl}${routePath}` : req.path;
       const labels = { method: req.method, route, status_code: String(res.statusCode) };
       httpRequestDuration.observe(labels, durationSec);
       httpRequestsTotal.inc(labels);

@@ -7,6 +7,8 @@ import { env } from '@/config';
 import { Errors } from '@/middleware/errorHandler';
 import { SignupInput, LoginInput } from '@/modules/auth/auth.schema';
 import { logger } from '@/lib/logger';
+import type { StringValue } from 'ms';
+
 
 interface AuthTokens {
   accessToken: string;
@@ -16,7 +18,7 @@ interface AuthTokens {
 const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 function signAccessToken(userId: string, role: string): string {
-  return jwt.sign({ sub: userId, role }, env.JWT_SECRET, { expiresIn: env.JWT_ACCESS_TTL as any });
+  return jwt.sign({ sub: userId, role }, env.JWT_SECRET, { expiresIn: env.JWT_ACCESS_TTL as StringValue });
 }
 
 function hashToken(rawToken: string): string {

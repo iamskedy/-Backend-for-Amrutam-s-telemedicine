@@ -26,23 +26,30 @@ async function main(): Promise<void> {
     logger.info({ port: env.PORT, env: env.NODE_ENV }, 'amrutam-telemedicine server listening');
   });
 
-  const shutdown = async (signal: string): Promise<void> => {
-    logger.info({ signal }, 'shutdown signal received, closing gracefully');
-    server.close(async () => {
-      await Promise.all([disconnectDb(), disconnectRedis()]);
-      logger.info('shutdown complete');
-      process.exit(0);
-    });
+ const shutdown = (signal: string): void => {
+  logger.info({ signal }, 'shutdown signal received, closing gracefully');
 
-    // force-exit if graceful shutdown hangs (e.g. a stuck connection)
-    setTimeout(() => {
-      logger.error('graceful shutdown timed out, forcing exit');
-      process.exit(1);
-    }, 10_000).unref();
-  };
+  server.close(() => {
+    void (async () => {
+      try {
+        await Promise.all([disconnectDb(), disconnectRedis()]);
+        logger.info('shutdown complete');
+        process.exit(0);
+      } catch (err) {
+        logger.error({ err }, 'error during graceful shutdown');
+        process.exit(1);
+      }
+    })();
+  });
 
-  process.on('SIGTERM', () => void shutdown('SIGTERM'));
-  process.on('SIGINT', () => void shutdown('SIGINT'));
+  setTimeout(() => {
+    logger.error('graceful shutdown timed out, forcing exit');
+    process.exit(1);
+  }, 10_000).unref();
+};
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
 main().catch((err) => {

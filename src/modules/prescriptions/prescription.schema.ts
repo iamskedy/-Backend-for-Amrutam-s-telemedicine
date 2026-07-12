@@ -18,3 +18,5 @@ export const createPrescriptionSchema = z.object({
 export const supersedePrescriptionSchema = z.object({
   content: createPrescriptionSchema.shape.content,
 });
+export type CreatePrescriptionInput = z.infer<typeof createPrescriptionSchema>;
+export type SupersedePrescriptionInput = z.infer<typeof supersedePrescriptionSchema>;

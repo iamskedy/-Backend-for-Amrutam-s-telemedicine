@@ -3,6 +3,7 @@ import { NextFunction, Request, Response } from 'express';
 import { redis } from '@/lib/redis';
 import { Errors } from '@/middleware/errorHandler';
 import { logger } from '@/lib/logger';
+import { asyncHandler } from '@/lib/asyncHandler';
 
 function createRateLimiter(points: number, duration: number) {
   const limiter = new RateLimiterRedis({
@@ -12,8 +13,7 @@ function createRateLimiter(points: number, duration: number) {
     keyPrefix: 'rl',
   });
 
-  return async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
-    
+  return asyncHandler(async (req: Request, _res: Response, next: NextFunction) => {
     const key = req.ip ?? 'unknown';
 
     try {
@@ -23,12 +23,11 @@ function createRateLimiter(points: number, duration: number) {
       if (err instanceof RateLimiterRes) {
         next(Errors.tooManyRequests());
       } else {
-        
         logger.error({ err }, 'rate limiter infrastructure error — failing open');
         next();
       }
     }
-  };
+  });
 }
 
 export const generalLimiter = createRateLimiter(100, 60);
