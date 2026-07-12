@@ -1,0 +1,712 @@
+openapi: 3.0.3
+info:
+  title: Amrutam Telemedicine API
+  description: >
+    Production-grade telemedicine backend: auth (with TOTP MFA + refresh rotation),
+    doctor profiles, availability slots, a booking saga with a mock payment gateway,
+    consultation lifecycle, prescriptions (with versioned corrections via "supersede"),
+    doctor search, and admin analytics.
+  version: 1.0.0
+servers:
+  - url: http://localhost:3000
+    description: Local
+  - url: https://staging.amrutam.example.com
+    description: Staging (placeholder — replace with real host)
+
+tags:
+  - name: Auth
+  - name: Doctors
+  - name: Availability
+  - name: Booking
+  - name: Consultations
+  - name: Prescriptions
+  - name: Search
+  - name: Admin Analytics
+  - name: Health
+
+paths:
+  /health/live:
+    get:
+      tags: [Health]
+      summary: Liveness probe
+      security: []
+      responses:
+        '200':
+          description: Process is up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { status: { type: string, example: ok } }
+
+  /health/ready:
+    get:
+      tags: [Health]
+      summary: Readiness probe (checks DB + Redis)
+      security: []
+      responses:
+        '200':
+          description: All dependencies healthy
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReadinessStatus' }
+        '503':
+          description: One or more dependencies unreachable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReadinessStatus' }
+
+  /health/metrics:
+    get:
+      tags: [Health]
+      summary: Prometheus metrics exposition
+      security: []
+      responses:
+        '200':
+          description: Metrics in Prometheus text format
+          content:
+            text/plain: { schema: { type: string } }
+
+  /api/v1/auth/signup:
+    post:
+      tags: [Auth]
+      summary: Create a PATIENT or DOCTOR account
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SignupRequest' }
+      responses:
+        '201':
+          description: Account created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { userId: { type: string, format: uuid } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409':
+          description: Account could not be created with the given details (deliberately vague — avoids user enumeration)
+          content:
+            application/json: { schema: { $ref: '#/components/schemas/Error' } }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /api/v1/auth/login:
+    post:
+      tags: [Auth]
+      summary: Log in with email + password
+      description: If MFA is enabled on the account, no tokens are issued yet — the response signals `mfaRequired` and the client must call `/auth/mfa/verify-login` next.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200':
+          description: Either tokens, or an MFA challenge
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/AuthTokens'
+                  - $ref: '#/components/schemas/MfaChallenge'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /api/v1/auth/mfa/enroll:
+    post:
+      tags: [Auth]
+      summary: Begin TOTP MFA enrollment (authenticated user)
+      responses:
+        '200':
+          description: otpauth:// URL to render as a QR code
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { otpauthUrl: { type: string } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/v1/auth/mfa/verify:
+    post:
+      tags: [Auth]
+      summary: Complete MFA enrollment by proving possession of the TOTP secret
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MfaCode' }
+      responses:
+        '200':
+          description: MFA enabled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { success: { type: boolean } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/v1/auth/mfa/verify-login:
+    post:
+      tags: [Auth]
+      summary: Complete a login that returned mfaRequired
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userId, code]
+              properties:
+                userId: { type: string, format: uuid }
+                code: { type: string, example: '123456' }
+      responses:
+        '200':
+          description: Tokens issued
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthTokens' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /api/v1/auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Rotate a refresh token for a new access/refresh pair
+      description: Reuse of an already-rotated (revoked) refresh token revokes the entire token family — a signal of possible token theft.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties: { refreshToken: { type: string } }
+      responses:
+        '200':
+          description: New token pair
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthTokens' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/v1/auth/logout:
+    post:
+      tags: [Auth]
+      summary: Revoke all refresh tokens for the current user (all sessions/devices)
+      responses:
+        '204': { description: Logged out }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/v1/doctors:
+    get:
+      tags: [Doctors]
+      summary: List verified doctors (public)
+      security: []
+      responses:
+        '200':
+          description: Doctors ordered by rating desc
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Doctor' } }
+
+  /api/v1/doctors/me/profile:
+    get:
+      tags: [Doctors]
+      summary: Get own doctor profile (DOCTOR only)
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Doctor' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Doctors]
+      summary: Update own doctor profile (DOCTOR only)
+      description: Required after signup to replace the placeholder specialty (`UNSPECIFIED`) and licenseNo (`PENDING-...`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateDoctorProfileRequest' }
+      responses:
+        '200': { description: Updated, content: { application/json: { schema: { $ref: '#/components/schemas/Doctor' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: License number already registered to another account
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
+  /api/v1/doctors/{id}:
+    get:
+      tags: [Doctors]
+      summary: Get a doctor by id (public, works for unverified doctors too)
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/DoctorId'
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Doctor' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/doctors/{id}/verify:
+    post:
+      tags: [Doctors]
+      summary: Verify a doctor's credentials (ADMIN only)
+      parameters:
+        - $ref: '#/components/parameters/DoctorId'
+      responses:
+        '200': { description: Verified, content: { application/json: { schema: { $ref: '#/components/schemas/Doctor' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/availability:
+    post:
+      tags: [Availability]
+      summary: Create an availability slot (DOCTOR only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateSlotRequest' }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/AvailabilitySlot' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/v1/availability/doctor/{doctorId}:
+    get:
+      tags: [Availability]
+      summary: List a doctor's OPEN slots (public)
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/DoctorId'
+        - name: from
+          in: query
+          schema: { type: string, format: date-time }
+          description: Only slots starting at/after this time (default now)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/AvailabilitySlot' } }
+
+  /api/v1/availability/{slotId}:
+    delete:
+      tags: [Availability]
+      summary: Cancel own OPEN slot (DOCTOR only)
+      parameters:
+        - name: slotId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Cancelled, content: { application/json: { schema: { $ref: '#/components/schemas/AvailabilitySlot' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Slot is not OPEN (already held/booked/cancelled)
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
+  /api/v1/bookings:
+    post:
+      tags: [Booking]
+      summary: Book a consultation (PATIENT only) — runs the booking saga
+      description: >
+        Requires an `Idempotency-Key` header. Saga: HOLD the slot (optimistic lock) →
+        PAY (mock gateway) → CONFIRM (transactional: slot BOOKED + Consultation created).
+        On payment failure the hold is released (compensation). Safe to retry with the
+        same Idempotency-Key — replays the original response.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string }
+          example: booking-key-001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BookConsultationRequest' }
+      responses:
+        '201': { description: Consultation created, content: { application/json: { schema: { $ref: '#/components/schemas/Consultation' } } } }
+        '400':
+          description: Missing Idempotency-Key header, or validation error
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Slot no longer available / lost the booking race
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
+  /api/v1/consultations/{id}:
+    get:
+      tags: [Consultations]
+      summary: Get a consultation by id
+      parameters:
+        - $ref: '#/components/parameters/ConsultationId'
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Consultation' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/consultations/{id}/status:
+    patch:
+      tags: [Consultations]
+      summary: Transition consultation status
+      description: |
+        Legal transitions only (enforced server-side):
+          SCHEDULED   -> IN_PROGRESS | CANCELLED | NO_SHOW
+          IN_PROGRESS -> COMPLETED | CANCELLED
+          COMPLETED / CANCELLED / NO_SHOW -> (terminal, no further transitions)
+      parameters:
+        - $ref: '#/components/parameters/ConsultationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [IN_PROGRESS, COMPLETED, CANCELLED, NO_SHOW] }
+      responses:
+        '200': { description: Updated, content: { application/json: { schema: { $ref: '#/components/schemas/Consultation' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Illegal transition for the consultation's current status
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
+  /api/v1/prescriptions:
+    post:
+      tags: [Prescriptions]
+      summary: Create a prescription (DOCTOR only, consultation must be COMPLETED)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreatePrescriptionRequest' }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/Prescription' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: Not the doctor for this consultation
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Consultation is not COMPLETED
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
+  /api/v1/prescriptions/{id}:
+    get:
+      tags: [Prescriptions]
+      summary: Get a prescription by id
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Prescription' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/prescriptions/{id}/supersede:
+    post:
+      tags: [Prescriptions]
+      summary: Issue a corrected version of an ACTIVE prescription (DOCTOR only)
+      description: The old row is flipped to SUPERSEDED (never mutated); a new ACTIVE row is created linking back via supersedesId — preserves an audit trail.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content: { $ref: '#/components/schemas/PrescriptionContent' }
+      responses:
+        '201': { description: New prescription version created, content: { application/json: { schema: { $ref: '#/components/schemas/Prescription' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Only an ACTIVE prescription can be superseded
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
+  /api/v1/search/doctors:
+    get:
+      tags: [Search]
+      summary: Search verified doctors (public)
+      description: Results cached in Redis for 60s per unique combination of query params.
+      security: []
+      parameters:
+        - name: specialty
+          in: query
+          schema: { type: string }
+        - name: minRating
+          in: query
+          schema: { type: number, minimum: 0, maximum: 5 }
+        - name: availableAfter
+          in: query
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: Up to 50 doctors, ordered by rating desc
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Doctor' } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /api/v1/admin/analytics/bookings-per-day:
+    get:
+      tags: [Admin Analytics]
+      summary: Bookings per day, trailing 30 days (ADMIN only)
+      responses:
+        '200':
+          description: Map of ISO date -> count
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: { type: integer } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/v1/admin/analytics/cancellation-rate:
+    get:
+      tags: [Admin Analytics]
+      summary: Cancellation rate, trailing 30 days (ADMIN only)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total: { type: integer }
+                  cancelled: { type: integer }
+                  rate: { type: number }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/v1/admin/analytics/revenue:
+    get:
+      tags: [Admin Analytics]
+      summary: Captured revenue, trailing 30 days (ADMIN only)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  totalRevenue: { type: number }
+                  capturedPayments: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    DoctorId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ConsultationId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+
+  responses:
+    BadRequest:
+      description: Validation error
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Unauthorized:
+      description: Missing/invalid/expired auth
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Forbidden:
+      description: Authenticated but role not permitted
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    NotFound:
+      description: Resource not found
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    TooManyRequests:
+      description: Rate limit exceeded
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string, example: BAD_REQUEST }
+            message: { type: string }
+            details: {}
+            requestId: { type: string }
+
+    ReadinessStatus:
+      type: object
+      properties:
+        status: { type: string, enum: [ok, degraded] }
+        dependencies:
+          type: object
+          properties:
+            database: { type: string, enum: [ok, unreachable] }
+            redis: { type: string, enum: [ok, unreachable] }
+
+    SignupRequest:
+      type: object
+      required: [email, password, role, fullName]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, minLength: 12 }
+        role: { type: string, enum: [PATIENT, DOCTOR] }
+        fullName: { type: string }
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string }
+
+    AuthTokens:
+      type: object
+      properties:
+        accessToken: { type: string }
+        refreshToken: { type: string }
+
+    MfaChallenge:
+      type: object
+      properties:
+        mfaRequired: { type: boolean, example: true }
+        userId: { type: string, format: uuid }
+
+    MfaCode:
+      type: object
+      required: [code]
+      properties:
+        code: { type: string, pattern: '^\d{6}$' }
+
+    Doctor:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        specialty: { type: string }
+        licenseNo: { type: string }
+        bio: { type: string, nullable: true }
+        rating: { type: number, nullable: true }
+        verifiedAt: { type: string, format: date-time, nullable: true }
+
+    UpdateDoctorProfileRequest:
+      type: object
+      required: [specialty, licenseNo]
+      properties:
+        specialty: { type: string }
+        licenseNo: { type: string }
+        bio: { type: string, maxLength: 2000 }
+
+    AvailabilitySlot:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        doctorId: { type: string, format: uuid }
+        startTime: { type: string, format: date-time }
+        endTime: { type: string, format: date-time }
+        status: { type: string, enum: [OPEN, HELD, BOOKED, CANCELLED] }
+        version: { type: integer }
+
+    CreateSlotRequest:
+      type: object
+      required: [startTime, endTime]
+      properties:
+        startTime: { type: string, format: date-time }
+        endTime: { type: string, format: date-time }
+
+    BookConsultationRequest:
+      type: object
+      required: [slotId, amount]
+      properties:
+        slotId: { type: string, format: uuid }
+        amount: { type: number, exclusiveMinimum: 0 }
+
+    Consultation:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        patientId: { type: string, format: uuid }
+        doctorId: { type: string, format: uuid }
+        slotId: { type: string, format: uuid }
+        status: { type: string, enum: [SCHEDULED, IN_PROGRESS, COMPLETED, CANCELLED, NO_SHOW] }
+        scheduledAt: { type: string, format: date-time }
+        startedAt: { type: string, format: date-time, nullable: true }
+        endedAt: { type: string, format: date-time, nullable: true }
+        idempotencyKey: { type: string }
+
+    PrescriptionContent:
+      type: object
+      required: [medicines]
+      properties:
+        medicines:
+          type: array
+          items:
+            type: object
+            required: [name, dosage, frequency, durationDays]
+            properties:
+              name: { type: string }
+              dosage: { type: string }
+              frequency: { type: string }
+              durationDays: { type: integer, minimum: 1 }
+        notes: { type: string }
+
+    CreatePrescriptionRequest:
+      type: object
+      required: [consultationId, content]
+      properties:
+        consultationId: { type: string, format: uuid }
+        content: { $ref: '#/components/schemas/PrescriptionContent' }
+
+    Prescription:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        consultationId: { type: string, format: uuid }
+        doctorId: { type: string, format: uuid }
+        patientId: { type: string, format: uuid }
+        content: { $ref: '#/components/schemas/PrescriptionContent' }
+        status: { type: string, enum: [ACTIVE, SUPERSEDED] }
+        supersedesId: { type: string, format: uuid, nullable: true }
+        pdfUrl: { type: string, nullable: true }
+        issuedAt: { type: string, format: date-time }
+
+security:
+  - bearerAuth: []
