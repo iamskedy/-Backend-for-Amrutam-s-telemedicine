@@ -9,15 +9,15 @@ describe('requireRole middleware', () => {
     return { user } as unknown as Request;
   }
 
-function mockNext(): jest.Mock<void, [Error?]> {
-  return jest.fn<void, [Error?]>();  
-}
+  function mockNext(): jest.Mock<void, [Error?]> {
+    return jest.fn<void, [Error?]>();
+  }
 
   it('allows a user whose role is in the allowed list', () => {
     const req = mockReq({ sub: '1', role: 'ADMIN' });
     const next = mockNext();
 
-    middleware(req, {} as Response, next as NextFunction);
+    middleware(req, {} as Response, next as unknown as NextFunction);
 
     expect(next).toHaveBeenCalledWith();
   });
@@ -26,22 +26,22 @@ function mockNext(): jest.Mock<void, [Error?]> {
     const req = mockReq({ sub: '2', role: 'PATIENT' });
     const next = mockNext();
 
-    middleware(req, {} as Response, next as NextFunction);
+    middleware(req, {} as Response, next as unknown as NextFunction);
 
     expect(next).toHaveBeenCalledTimes(1);
-   const errArg = next.mock.calls[0][0] as AppError;
+    const errArg = next.mock.calls[0]![0]! as AppError;
     expect(errArg).toBeInstanceOf(AppError);
-    expect(errArg.statusCode).toBe(403);  
+    expect(errArg.statusCode).toBe(403);
   });
 
   it('denies a request with no authenticated user at all', () => {
     const req = mockReq(undefined);
     const next = mockNext();
 
-    middleware(req, {} as Response, next as NextFunction);
+    middleware(req, {} as Response, next as unknown as NextFunction);
 
     expect(next).toHaveBeenCalledTimes(1);
-    const errArg = next.mock.calls[0][0];
+    const errArg = next.mock.calls[0]![0]! as AppError;
     expect(errArg).toBeInstanceOf(AppError);
     expect(errArg.statusCode).toBe(401);
   });
