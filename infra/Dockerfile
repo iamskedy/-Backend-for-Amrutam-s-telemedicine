@@ -1,6 +1,9 @@
 # ---- Build stage ----
-FROM node:20-alpine AS build
+FROM node:20-alpine3.20 AS build
 WORKDIR /app
+
+# Update system packages to patch vulnerabilities
+RUN apk update && apk upgrade
 
 COPY package*.json ./
 RUN npm ci
@@ -13,9 +16,12 @@ COPY src ./src
 RUN npm run build
 
 # ---- Runtime stage ----
-FROM node:20-alpine AS runtime
+FROM node:20-alpine3.20 AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
+
+# Update system packages to patch vulnerabilities
+RUN apk update && apk upgrade
 
 # Non-root user — don't run the app as root inside the container.
 RUN addgroup -g 1001 -S nodejs && adduser -S amrutam -u 1001
