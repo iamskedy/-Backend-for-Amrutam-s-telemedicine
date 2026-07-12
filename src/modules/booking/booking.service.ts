@@ -15,22 +15,23 @@ interface BookConsultationInput {
 
 /**
  * Booking saga:
- *   1. HOLD   — optimistic-lock the slot (OPEN -> HELD). Prevents two
- *               concurrent bookers from both proceeding to payment for the
- *               same slot.
- *   2. PAY    — charge via the mock payment provider. On failure, release
- *               the hold (compensation) and abort.
- *   3. CONFIRM — in one DB transaction: slot HELD -> BOOKED, create the
- *               Consultation row, done. Payment is already CAPTURED by
- *               this point (payment.service.ts already committed it).
+ *   1. HOLD + CREATE — in one DB transaction: optimistic-lock the slot
+ *               (OPEN -> HELD) and create the Consultation row. Doing both
+ *               together means a real, committed consultation.id exists
+ *               before we ever try to charge for it — payments have a
+ *               required FK to consultations, so the id must be real.
+ *   2. PAY    — charge via the mock payment provider using the real
+ *               consultation.id. On failure, compensate by deleting the
+ *               consultation and reopening the slot.
+ *   3. CONFIRM — slot HELD -> BOOKED. Payment is already CAPTURED by this
+ *               point (payment.service.ts already committed it).
  *
  * Idempotency: checked FIRST, before any of the above — a retry with the
  * same idempotencyKey short-circuits to the existing consultation and never
  * re-enters the saga at all. This is a second, DB-level idempotency layer
  * on top of the Redis-based middleware (which is fire-and-forget and has a
  * small race window, documented in idempotency.ts) — this one is
- * authoritative because it's checked inside the same transaction boundary
- * as slot booking.
+ * authoritative because it's checked against real committed rows.
  */
 export async function bookConsultation(patientId: string, input: BookConsultationInput) {
   const existing = await prisma.consultation.findUnique({
@@ -50,66 +51,59 @@ export async function bookConsultation(patientId: string, input: BookConsultatio
     throw Errors.conflict('Slot is no longer available');
   }
 
-  // --- STEP 1: HOLD (optimistic lock via version) ---
-  const held = await prisma.availabilitySlot.updateMany({
-    where: { id: slot.id, status: 'OPEN', version: slot.version },
-    data: { status: 'HELD', version: { increment: 1 } },
+  // --- STEP 1: HOLD slot + create Consultation together, atomically ---
+  const consultation = await prisma.$transaction(async (tx) => {
+    const held = await tx.availabilitySlot.updateMany({
+      where: { id: slot.id, status: 'OPEN', version: slot.version },
+      data: { status: 'HELD', version: { increment: 1 } },
+    });
+
+    if (held.count === 0) {
+      // Someone else's request won the race between our read and our write.
+      bookingSagaOutcome.inc({ outcome: 'slot_conflict' });
+      throw Errors.conflict('Slot was just booked by someone else — please pick another slot');
+    }
+
+    return tx.consultation.create({
+      data: {
+        patientId,
+        doctorId: slot.doctorId,
+        slotId: slot.id,
+        status: 'SCHEDULED',
+        scheduledAt: slot.startTime,
+        idempotencyKey: input.idempotencyKey,
+      },
+    });
   });
 
-  if (held.count === 0) {
-    // Someone else's request won the race between our read and our write.
-    bookingSagaOutcome.inc({ outcome: 'slot_conflict' });
-    throw Errors.conflict('Slot was just booked by someone else — please pick another slot');
-  }
-
-  // --- STEP 2: PAY ---
+  // --- STEP 2: PAY, now with a real, committed consultationId ---
   let payment;
   try {
     payment = await authorizeAndCapture({
-      consultationId: slot.id, // placeholder ref; real consultationId doesn't exist yet
+      consultationId: consultation.id,
       amount: input.amount,
       idempotencyKey: `${input.idempotencyKey}:payment`,
       simulateFailure: input.simulatePaymentFailure,
     });
   } catch (err) {
-    // COMPENSATION: release the hold so the slot becomes bookable again.
-    await prisma.availabilitySlot.update({
-      where: { id: slot.id },
-      data: { status: 'OPEN', version: { increment: 1 } },
-    });
+    // COMPENSATION: undo both the hold and the consultation row.
+    await prisma.$transaction([
+      prisma.consultation.delete({ where: { id: consultation.id } }),
+      prisma.availabilitySlot.update({
+        where: { id: slot.id },
+        data: { status: 'OPEN', version: { increment: 1 } },
+      }),
+    ]);
     bookingSagaOutcome.inc({ outcome: 'payment_failed' });
-    logger.warn({ slotId: slot.id, err }, 'payment failed — slot hold released');
+    logger.warn({ slotId: slot.id, err }, 'payment failed — hold and consultation rolled back');
     throw err;
   }
 
-  // --- STEP 3: CONFIRM (atomic) ---
+  // --- STEP 3: CONFIRM (slot HELD -> BOOKED; payment already CAPTURED) ---
   try {
-    const consultation = await prisma.$transaction(async (tx) => {
-      const c = await tx.consultation.create({
-        data: {
-          patientId,
-          doctorId: slot.doctorId,
-          slotId: slot.id,
-          status: 'SCHEDULED',
-          scheduledAt: slot.startTime,
-          idempotencyKey: input.idempotencyKey,
-        },
-      });
-
-      await tx.availabilitySlot.update({
-        where: { id: slot.id },
-        data: { status: 'BOOKED' },
-      });
-
-      // Payment row was created against a placeholder consultationId
-      // (slot.id) in step 2 since the real Consultation didn't exist yet —
-      // repoint it now that we have the real one.
-      await tx.payment.update({
-        where: { id: payment.id },
-        data: { consultationId: c.id },
-      });
-
-      return c;
+    await prisma.availabilitySlot.update({
+      where: { id: slot.id },
+      data: { status: 'BOOKED' },
     });
 
     bookingSagaOutcome.inc({ outcome: 'committed' });
@@ -133,14 +127,14 @@ export async function bookConsultation(patientId: string, input: BookConsultatio
     return consultation;
   } catch (err) {
     // If this final step somehow fails after payment already succeeded,
-    // we have a genuine inconsistency (payment captured, no consultation
-    // record). Rather than attempt an automatic refund here (compounding
+    // we have a genuine inconsistency (payment captured, slot still shows
+    // HELD). Rather than attempt an automatic refund here (compounding
     // failure modes in a catch block), log it loudly for manual/automated
     // reconciliation — this tradeoff is documented in architecture.md.
     bookingSagaOutcome.inc({ outcome: 'rolled_back' });
     logger.error(
-      { slotId: slot.id, paymentId: payment.id, err },
-      'CRITICAL: payment captured but consultation confirmation failed — needs reconciliation',
+      { slotId: slot.id, paymentId: payment.id, consultationId: consultation.id, err },
+      'CRITICAL: payment captured but slot confirmation failed — needs reconciliation',
     );
     throw Errors.internal('Booking could not be completed — please contact support');
   }
