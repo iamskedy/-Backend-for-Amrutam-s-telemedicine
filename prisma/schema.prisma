@@ -43,6 +43,11 @@ enum PaymentStatus {
   FAILED
 }
 
+enum PrescriptionStatus {
+  ACTIVE
+  SUPERSEDED
+}
+
 model User {
   id            String      @id @default(uuid())
   email         String      @unique
@@ -145,7 +150,10 @@ model Consultation {
 
   idempotencyKey String   @unique @map("idempotency_key")
 
-  prescription Prescription?
+  createdAt   DateTime    @default(now()) @map("created_at")
+  updatedAt   DateTime    @updatedAt @map("updated_at")
+
+  prescriptions Prescription[]
   payment      Payment?
 
   @@index([doctorId])
@@ -155,29 +163,37 @@ model Consultation {
 }
 
 model Prescription {
-  id              String   @id @default(uuid())
+  id String @id @default(uuid())
 
-  consultationId  String   @unique @map("consultation_id")
-  consultation    Consultation @relation(fields: [consultationId], references: [id])
+  consultationId String @map("consultation_id")
+  consultation   Consultation @relation(fields: [consultationId], references: [id])
 
-  doctorId        String   @map("doctor_id")
-  patientId       String   @map("patient_id")
+  doctorId  String @map("doctor_id")
+  patientId String @map("patient_id")
 
-  doctor          Doctor   @relation("DoctorPrescriptions", fields: [doctorId], references: [id])
-  patient         User     @relation("PatientPrescriptions", fields: [patientId], references: [id])
+  doctor  Doctor @relation("DoctorPrescriptions", fields: [doctorId], references: [id])
+  patient User   @relation("PatientPrescriptions", fields: [patientId], references: [id])
 
-  content         Json
+  content Json
+  status  PrescriptionStatus @default(ACTIVE)
 
-  issuedAt        DateTime @default(now()) @map("issued_at")
+  supersedesId String?       @unique @map("supersedes_id")
+  supersedes   Prescription? @relation("PrescriptionVersion", fields: [supersedesId], references: [id])
+  supersededBy Prescription? @relation("PrescriptionVersion")
 
+  pdfUrl String? @map("pdf_url")
+
+  issuedAt DateTime @default(now()) @map("issued_at")
+
+  @@index([consultationId])
   @@map("prescriptions")
 }
 
 model Payment {
   id                String @id @default(uuid())
 
-  consultationId    String @unique @map("consultation_id")
-  consultation       Consultation @relation(fields: [consultationId], references: [id])
+  consultationId String @unique @map("consultation_id")
+  consultation   Consultation @relation(fields: [consultationId], references: [id])
 
   amount            Decimal @db.Decimal(10,2)
 
@@ -188,6 +204,9 @@ model Payment {
   providerRef       String? @map("provider_ref")
 
   idempotencyKey    String @unique @map("idempotency_key")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("payments")
 }
