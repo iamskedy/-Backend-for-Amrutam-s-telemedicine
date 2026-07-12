@@ -1,4 +1,13 @@
-import { PrismaClient, Role, SlotStatus, ConsultationStatus, PaymentStatus, PrescriptionStatus } from '@prisma/client';
+import {
+  PrismaClient,
+  Role,
+  SlotStatus,
+  ConsultationStatus,
+  PaymentStatus,
+  PrescriptionStatus,
+  Doctor,
+  User,
+} from '@prisma/client';
 import { faker } from '@faker-js/faker';
 import bcrypt from 'bcryptjs';
 // ^ If your auth service uses a different hashing lib (bcrypt, argon2, etc.),
@@ -50,7 +59,7 @@ async function main() {
   });
 
   // ---------- Doctors (15) ----------
-  const doctors = [];
+  const doctors: Doctor[] = [];
   for (let i = 0; i < 15; i++) {
     const firstName = faker.person.firstName();
     const lastName = faker.person.lastName();
@@ -82,7 +91,7 @@ async function main() {
   }
 
   // ---------- Patients (20) ----------
-  const patients = [];
+  const patients: User[] = [];
   for (let i = 0; i < 20; i++) {
     const user = await prisma.user.create({
       data: {
@@ -102,14 +111,28 @@ async function main() {
     patients.push(user);
   }
 
+  if (patients.length === 0) {
+    throw new Error('No patients were seeded — cannot assign consultations');
+  }
+
+  function pickPatient(cursor: number): User {
+    const patient = patients[cursor % patients.length];
+    if (!patient) {
+      throw new Error('No patients seeded — cannot assign to consultation');
+    }
+    return patient;
+  }
+
   // ---------- Availability slots ----------
   // Each doctor gets a mix: several OPEN slots in the future, a couple
   // already BOOKED (feeding real consultations below), one HELD (mid-saga),
   // one CANCELLED — enough variety to exercise each SlotStatus.
-  const bookedSlotsByDoctor: Record<string, { slot: any; doctor: any }[]> = {};
+  const bookedSlotsByDoctor: Record<string, { slot: any; doctor: Doctor }[]> = {};
 
   for (const doctor of doctors) {
-    bookedSlotsByDoctor[doctor.id] = [];
+    const slotsForDoctor: { slot: any; doctor: Doctor }[] = [];
+    bookedSlotsByDoctor[doctor.id] = slotsForDoctor;
+
     const baseDay = faker.date.soon({ days: 3 });
 
     for (let day = 0; day < 5; day++) {
@@ -135,7 +158,7 @@ async function main() {
         });
 
         if (status === SlotStatus.BOOKED) {
-          bookedSlotsByDoctor[doctor.id].push({ slot, doctor });
+          slotsForDoctor.push({ slot, doctor });
         }
       }
     }
@@ -156,12 +179,12 @@ async function main() {
     ConsultationStatus.NO_SHOW,
   ];
 
-  for (let i = 0; i < allBookedSlots.length; i++) {
-    const { slot, doctor } = allBookedSlots[i];
-    const patient = patients[patientCursor % patients.length];
+  for (const [i, { slot, doctor }] of allBookedSlots.entries()) {
+    const patient = pickPatient(patientCursor);
     patientCursor++;
 
-    const status = CONSULTATION_STATUSES[i % CONSULTATION_STATUSES.length];
+    const status = CONSULTATION_STATUSES[i % CONSULTATION_STATUSES.length]!;
+    // ^ safe to assert: i % length is always a valid index into a literal array
 
     const consultation = await prisma.consultation.create({
       data: {

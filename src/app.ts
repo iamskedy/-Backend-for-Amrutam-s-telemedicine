@@ -3,7 +3,9 @@ import helmet from 'helmet';
 import cors from 'cors';
 import compression from 'compression';
 import pinoHttp from 'pino-http';
-
+import swaggerUi from "swagger-ui-express";
+import YAML from "yamljs";
+import path from "path";
 import { logger } from '@/lib/logger';
 import { requestContext } from '@/middleware/requestContext';
 import { errorHandler, notFoundHandler } from '@/middleware/errorHandler';
@@ -55,7 +57,11 @@ export function buildApp(): Express {
     next();
   });
 
- 
+ const swaggerDocument = YAML.load(
+  path.join(process.cwd(), "docs", "openapi.yaml")
+);
+
+  app.use("/api-docs",swaggerUi.serve,swaggerUi.setup(swaggerDocument));
   app.use('/health', healthRouter);
   app.use('/api/v1/auth', authRouter);
   app.use('/api/v1/doctors', doctorRouter);
